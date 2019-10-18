@@ -1,0 +1,355 @@
+<!doctype html>
+<html>
+  <head>
+    <meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+
+    <style>
+      body,html {height:100%;margin:0;padding:0}
+      #g-c{align-items:center;display:flex;height:100%;justify-content:center}
+      #g-cv{height:100vw;width:100vw}
+      @media (min-aspect-ratio:1/1){#g-cv{height:100vh;width:100vh}}
+    </style>
+  </head>
+
+  <body>
+    <div id=g-c>
+      <canvas height=1000 id=g-cv width=1000></canvas>
+    </div>
+
+
+    <script type="module">
+import InputWatchdog from "../lib/input_watchdog.js"
+
+/**
+ * @const
+ * @type {Document}
+ */
+var d = document;
+
+/**
+ * @const
+ * @type {Window}
+ */
+var w = window;
+/**
+ * Handles the keyboard down event
+ *
+ * @param {Object} e - The event.
+ * @param {boolean} e.defaultPrevented
+ * @param {string} [e.key] - The key.
+ * @param {number} [e.keyCode] - The key code.
+ */
+function onKeyDown(e) {
+  // TODO: Only add this logic if at least one (1) key down event handled (e.g. onKeyDownSpacebar)
+
+  if (e.defaultPrevented) return;
+
+  // TODO: Assert all evergreen browsers handled
+  var k = e.key || e.keyCode;
+  if (k === ' ' || k === 'Space' || k === 32) onKeyDownSpacebar();
+}
+
+d.addEventListener('keydown', onKeyDown);if (d.readyState === 'complete' || (d.readyState !== 'loading' && !d.documentElement.doScroll)) {
+  onDocumentLoad();
+} else {
+  d.addEventListener('DOMContentLoaded', onDocumentLoad);
+}
+/**
+ * @const
+ * @type {HTMLCanvasElement}
+ */
+var cv;
+
+/**
+ * @const
+ * @type {CanvasRenderingContext2D}
+ */
+var ctx;
+
+/**
+ * @const
+ * @type {number}
+ */
+var t;
+
+/**
+ * @const
+ * @type {Object[]}
+ */
+var os = [];
+
+/**
+ * @const
+ * @type {number}
+ */
+var speed = 10;
+
+/**
+ * @const
+ * @type {boolean}
+ */
+var state = -5;
+
+/**
+ * @const
+ * @type {number}
+ */
+var timer;
+
+/**
+ * Adds a distinct color divider to half the screen
+ */
+function createInvertedDiv() {
+  var div = d.createElement('div');
+
+  div.style.backgroundColor = 'black';
+  div.style.bottom = 0;
+  div.style.height = '50%';
+  div.style.left = 0;
+  div.style.position = 'absolute';
+  div.style.width = '100%';
+  div.style.zIndex = -1;
+
+  d.body.appendChild(div);
+}
+
+/**
+ * Transforms frames in (0, 0, 1000, 1000) space to (-50, -50, 100, 100) space
+ *
+ * @param {number} x - The x-coordinate
+ * @param {number} y - The y-coordinate
+ * @param {number} h - The height
+ * @param {number} w - The width
+ *
+ * @return {Object} The transformed frame
+ */
+function getFrame(x, y, h, w) {
+  return {
+    x: 10 * (x + 50),
+    y: 10 * (y + 50),
+    h: h * 10,
+    w: w * 10
+  }
+}
+
+/**
+ * Draws a rectangle
+ *
+ * @param {Object} f - The frame
+ * @param {string} [color="black"] - The color
+ */
+function drawRect(f, color = 'black') {
+  ctx.beginPath();
+  ctx.rect(f.x, f.y, f.h, f.w);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.closePath();
+}
+
+/**
+ * Retrieves the current character frame
+ */
+function getCharacterFrame() {
+  return {
+    x: -45, y: state, w: 5, h: 10
+  };
+}
+
+/**
+ * Draws the character
+ */
+function drawCharacter() {
+  // Draw a slightly taller inverted color character to provide a guide line.
+  var f = getFrame(-45, state - 0.1, 5, 10.2);
+  drawRect(f, state <= - 5? 'white' : 'black');
+
+  var f = getFrame(-45, state, 5, 10);
+  drawRect(f, state <= - 5? 'black' : 'white');
+}
+
+/**
+ * Draws an obstacle
+ *
+ * @param {Object} f - The frame
+ */
+function drawObstacle(f) {
+  drawRect(f, 'red');
+}
+
+/**
+ * Draws the obstacles
+ *
+ * @param {number} et - The elapsed time since last draw was executed
+ */
+function drawObstacles(et) {
+  var safeguard = 10;
+
+  if (os.length === 0) {
+    var o = {
+      x: 50,
+      y: Math.random() < 0.5 ? -10 : 5,
+      h: 5,
+      w: safeguard + 5 * Math.random()
+    }
+
+    os.push(o);
+  } else {
+    var o = os[os.length - 1];
+    while (o.x < 50) {
+      var randX = (o.x + o.w) + safeguard + 5 * Math.random();
+
+      var newO = {
+        x: randX,
+        y: Math.random() < 0.5 ? -10 : 5,
+        h: 5,
+        w: safeguard + 5 * Math.random()
+      };
+
+      os.push(newO);
+      o = newO;
+    }
+  }
+
+  var seconds = et / 1000;
+
+  os = os
+    .map(function(o) {
+      o.x -= speed * seconds;
+
+      // TODO: Only draw obstacles in frame
+      var f = getFrame(o.x, o.y, o.w, o.h);
+      drawObstacle(f);
+
+      return o;
+    }).filter(function(o) {
+      return o.x + o.w > -50;
+    });
+
+  speed += seconds;
+}
+
+/**
+ * Detects if two (2) frames are colliding
+ *
+ * @param {Object} a - A frame
+ * @param {Object} b - A frame
+ */
+function collide(a, b) {
+  function ac(a, b, d, dim) {
+    return (a[d] >= b[d] && a[d] <= b[d] + b[dim]) || (a[d] + a[dim] >= b[d] && a[d] + a[dim] <= b[d] + b[dim]);
+  }
+
+  return ac(a, b, 'x', 'w') && ac(a, b, 'y', 'h');
+}
+
+/**
+ * Detects collisions between character and obstacles
+ */
+function detectCollision() {
+  var characterFrame = getCharacterFrame();
+
+  os.forEach(function(o) {
+    if (collide(characterFrame, o)) {
+      fail();
+    }
+  });
+}
+
+function fail() {
+  clearInterval(timer);
+  window.setTimeout(e => {
+    os = [];
+    startTimer();
+  }, 1000);
+}
+
+/**
+ * Draws all elements
+ *
+ * @param {number} et - The elapsed time since last draw was executed
+ */
+function draw(et) {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  drawCharacter();
+  drawObstacles(et);
+  detectCollision();
+}
+
+/**
+ * Enable Full Screen
+ */
+function injectFullScreenButton(callback) {
+  const button = document.createElement('button');
+  button.innerText = 'Make Full Screen';
+  button.style.width = '100%';
+  button.style.height = '100%';
+  button.addEventListener('click', e => {
+    button.remove();
+    document.body.requestFullscreen();
+    callback();
+  })
+  document.body.prepend(button);
+}
+
+
+let paused = false;
+const inputWatchdog = InputWatchdog({timeoutPeriodMs: 100})
+inputWatchdog.on('problem', () => paused = true)
+inputWatchdog.on('ok', () => paused = false)
+
+/**
+ * Enable the input event stream
+*/
+function enableInputEvents() {
+  const ws = new WebSocket(`ws://${window.location.host}/input`)
+  ws.onmessage = e => {
+    inputWatchdog.reset()
+    const [controller1Analog, controller1Buttons] = JSON.parse(e.data);
+
+    // Navigate to root path if system button pressed.
+    const controller1SystemButtonPressed = (controller1Buttons & 1) === 1
+    if (controller1SystemButtonPressed)
+      window.location = '/'
+
+    // Clamp the analog reading to the range [0, -10] and update the state.
+    state = ((10 / 512) * controller1Analog) - 10;
+    console.debug(state);
+  }
+}
+
+/**
+ * Executed on document load
+ */
+function startTimer() {
+  t = (new Date).getTime();
+  var nt = (new Date).getTime();
+  timer = setInterval(function() {
+    if (!paused) {
+      nt += 16
+      draw(nt - t);
+      t = nt;
+    }
+  }, 16);
+}
+
+function postFullScreen() {
+  createInvertedDiv();
+
+  cv = d.getElementById('g-cv');
+  ctx = cv.getContext('2d');
+
+  startTimer();
+}
+
+function onDocumentLoad() {
+  let params = new URLSearchParams(window.location.search)
+  const preview = params.get('preview') === '1'
+  if (preview) {
+    postFullScreen()
+  } else {
+    // injectFullScreenButton(postFullScreen);
+    postFullScreen();
+    enableInputEvents();
+  }
+
+};</script></body></html>
