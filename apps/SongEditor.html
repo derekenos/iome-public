@@ -1,0 +1,323 @@
+<!doctype html>
+
+<html lang="en">
+
+  <head>
+    <meta charset="utf-8">
+
+
+    <style>
+
+      select {
+        cursor: pointer;
+      }
+
+      #tab > tbody > tr:first-child > td {
+        padding-top: 1em;
+      }
+
+      #tab input {
+        font-size: .7em;
+        width: 1.2em;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background-color: transparent;
+        border-bottom: solid #000 1px;
+        text-align: center;
+      }
+
+      #tab input.active {
+        border-color: #fff;
+        font-weight: bold;
+      }
+
+      button {
+        margin-top: 2em;
+      }
+
+    </style>
+
+
+    <script type="module">
+
+      import Element from "../lib/element.js"
+      import { Audio, OSC_TYPE, TUNING } from "../lib/audio.js"
+
+      // Define a jquery-like selector function that wraps document.querySelector().
+      const $ = q => document.querySelector(q)
+      const $$ = q => document.querySelectorAll(q)
+
+      // Define a default song state.
+      const NEW_SONG = {
+        name: "New Song",
+        stepPeriodMs: 62,
+        oscType: "TRIANGLE",
+        noteDuration: 1,
+        noteInitialGain: 0.05,
+        noteFinalGain: 0.001,
+        tuning: "STANDARD",
+        tab: [
+          [
+            "---------------- ---------------- ---------------- --------2-------",
+            "2--------------- 4--------------- 5--------------- ------2---2-----",
+            "---------------- ---------------- ---------------- ----2-------2---",
+            "2--------------- 2--------------- 2-------2------- 0-2---0---0---4-",
+            "2--------------- ---------------- ---------------- ----0-------0---",
+            "0--------------- 2--------------- 0--------------- 0---------------",
+          ],
+          [
+            "---------------- ---------------- ---------------- --------2-------",
+            "1--------------- 0--------------- 5--------------- ------2---2-----",
+            "---------------- ---------------- ---------------- ----2-------2---",
+            "2--------------- 2--------------- 2-------2------- 0-2---0---0---4-",
+            "3--------------- ---------------- ---------------- ----0-------0---",
+            "0--------------- 2--------------- 0--------------- 0---------------",
+          ]
+        ]
+      }
+
+
+      function initForm (song) {
+        // Set simple properties.
+        for (let propName of [
+          "name",
+          "stepPeriodMs",
+          "noteDuration",
+          "noteInitialGain",
+          "noteFinalGain",
+        ]) {
+          $(`input[name="${propName}"]`).value = song[propName]
+        }
+
+        // Set oscType.
+        const oscTypeSelect = $('select[name="oscType"]')
+        Object.entries(OSC_TYPE).forEach(([oscName]) => {
+          oscTypeSelect.appendChild(
+            Element(`<option${song.oscType === oscName ? " selected" : ""}>${oscName}</option>`)
+          )
+        })
+
+        // Set tuning.
+        const tuningSelect = $('select[name="tuning"]')
+        Object.entries(TUNING).forEach(([tuningName]) => {
+          tuningSelect.appendChild(
+            Element(`<option${song.tuning === tuningName ? " selected" : ""}>${tuningName}</option>`)
+          )
+        })
+
+        // Init tab.
+        const tabTable = $("#tab")
+        function redrawTabTable () {
+          Array.from(tabTable.children).forEach(el => el.remove())
+          song.tab.forEach((measure, measureIndex) => {
+            const tabTbody = Element('tbody')
+            for (let rowIndex = 0; rowIndex < measure.length; rowIndex += 1) {
+              const row = measure[rowIndex]
+              const tr = Element('tr')
+              for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
+                const char = row[colIndex]
+                const td = Element('td')
+                if (char === " ") {
+                  td.innerHTML = "&nbsp;"
+                } else {
+                  const fretNumber = parseInt(char, 16)
+                  const el = Element(
+                    `<input type="text" value="${isNaN(fretNumber) ? '' : fretNumber}" data-measure="${measureIndex}" data-row="${rowIndex}" data-col="${colIndex}"></input>`
+                  )
+                  td.appendChild(el)
+                }
+                tr.appendChild(td)
+              }
+              tabTbody.appendChild(tr)
+            }
+            tabTable.appendChild(tabTbody)
+          })
+        }
+        redrawTabTable()
+
+        // Add tab table keypress navigation.
+        const NUM_MEASURES = song.tab.length
+        const NUM_ROWS = song.tab[0].length
+        const NUM_COLS = song.tab[0][0].length
+        tabTable.addEventListener("keydown", e => {
+          const el = e.target
+          let measure = parseInt(el.dataset.measure)
+          let row = parseInt(el.dataset.row)
+          let col = parseInt(el.dataset.col)
+          switch (e.key) {
+          case "ArrowUp":
+            if (row > 0) {
+              row -= 1
+            } else if (measure > 0 ) {
+              measure -= 1
+              row = NUM_ROWS - 1
+            } else {
+              measure = NUM_MEASURES - 1
+              row = NUM_ROWS - 1
+            }
+            break
+          case "ArrowRight":
+            col = col === NUM_COLS - 1 ? 0 : col + 1
+            break
+          case "ArrowDown":
+            if (row < NUM_ROWS - 1) {
+              row += 1
+            } else if (measure < NUM_MEASURES -1 ) {
+              measure += 1
+              row = 0
+            } else {
+              measure = 0
+              row = 0
+            }
+            break
+          case "ArrowLeft":
+            col = col === 0 ? NUM_COLS - 1 : col - 1
+            break
+          default:
+            return
+            break
+          }
+          let inputEl = $(`input[data-measure="${measure}"][data-row="${row}"][data-col="${col}"]`)
+          if (inputEl !== null) {
+            inputEl.focus()
+            e.preventDefault()
+          } else {
+            col += e.key === "ArrowRight" ? 1 : -1
+            $(`input[data-row="${row}"][data-col="${col}"]`).focus()
+          }
+        })
+
+        // Mutate the song object on param modification.
+        $('#params').addEventListener('change', e => {
+          const el = e.target
+          song[el.name] = el.type === "number" ? parseFloat(el.value) : el.value
+        })
+
+        // Mutate the song object tab on tab modification.
+        $('#tab').addEventListener('change', e => {
+          const el = e.target
+          const measure = parseInt(el.dataset.measure)
+          const row = parseInt(el.dataset.row)
+          const col = parseInt(el.dataset.col)
+          const fretNumber = parseInt(el.value, 16)
+          let rowStr = song.tab[measure][row]
+          rowStr = rowStr.slice(0, col)
+            + (isNaN(fretNumber) ? "-" : `${fretNumber}`)
+            + rowStr.slice(col + 1, row.length)
+          song.tab[measure][row] = rowStr
+        })
+
+        $("#add-measure").addEventListener('click', e => {
+          e.preventDefault()
+          song.tab.push(song.tab[song.tab.length - 1])
+          redrawTabTable()
+        })
+      }
+
+
+      document.addEventListener("DOMContentLoaded", () => {
+        initForm(NEW_SONG)
+
+        // Define a playback progress callback to highlight the active tab column.
+        function progressCallback ({numMeasure, currentMeasure, numCols, currentCol}) {
+          $$('#tab input').forEach(el => {
+            if (el.dataset.measure === `${currentMeasure}` && el.dataset.col === `${currentCol}`) {
+              el.classList.add('active')
+            } else {
+              el.classList.remove('active')
+            }
+          })
+        }
+
+        new Audio().playSong(NEW_SONG, true, progressCallback)
+
+        $('#export-to-console').addEventListener('click', () => {
+          console.log(JSON.stringify(NEW_SONG, null, 2))
+        })
+
+      })
+
+    </script>
+
+  </head>
+
+  <body>
+    <form>
+      <table id="params">
+
+        <tr>
+          <td>
+            <label for="name">Name</label>
+          </td>
+          <td>
+            <input type="text" name="name"></input>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="stepPeriodMs">stepPeriodMs</label>
+          </td>
+          <td>
+            <input type="number" min="0" name="stepPeriodMs"></input>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="oscType">oscType</label>
+          </td>
+          <td>
+            <select name="oscType"></select>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="noteDuration">noteDuration</label>
+          </td>
+          <td>
+            <input type="number" name="noteDuration" step="0.001"></input>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="noteInitialGain">noteInitialGain</label>
+          </td>
+          <td>
+            <input type="number" name="noteInitialGain" step="0.001"></input>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="noteFinalGain">noteFinalGain</label>
+          </td>
+          <td>
+            <input type="number" name="noteFinalGain" step="0.001"></input>
+          </td>
+        </tr>
+
+        <tr>
+          <td>
+            <label for="tuning">tuning</label>
+          </td>
+          <td>
+            <select name="tuning"></select>
+          </td>
+        </tr>
+      </table>
+
+      <table id="tab"></table>
+
+      <button id="add-measure">Add Measure</button>
+
+    </form>
+
+    <button id="export-to-console">Export to console</button>
+
+  </body>
+
+</html>

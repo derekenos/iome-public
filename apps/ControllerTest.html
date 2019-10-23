@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+
+<html>
+
+  <head>
+
+    <style>
+
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+
+      canvas {
+        background-color: white;
+      }
+
+      button {
+        position: absolute;
+        top: 0;
+        font-size: 2em;
+      }
+
+    </style>
+
+    <script type="module">
+      import Element from "../lib/element.js"
+      import InputWatchdog from "../lib/input_watchdog.js"
+
+      const CONSTANTS = {
+        MAX_KNOB_VALUE: 511,
+        DISPLAY_WIDTH_PIXELS: 0,
+        DISPLAY_HEIGHT_PIXELS: 0,
+      }
+
+      // Clamp knob value to the range 0 - 1
+      const normalizeKnobValue = x => x / CONSTANTS.MAX_KNOB_VALUE
+
+      function redraw (
+        [controller1KnobValue,
+         controller1ButtonValue,
+         controller2KnobValue,
+         controller2ButtonValue
+        ]
+      ) {
+        controller1KnobValue = normalizeKnobValue(controller1KnobValue)
+        controller2KnobValue = normalizeKnobValue(controller2KnobValue)
+
+        const canvas = document.getElementById('canvas')
+        const ctx = canvas.getContext('2d')
+
+        const fontSizePixels = Math.ceil(CONSTANTS.DISPLAY_WIDTH_PIXELS / 100)
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+        function drawControllerCircle (
+          controllerNum,
+          knobValue,
+          systemButtonValue,
+          knobButtonValue
+        ) {
+          let circleFillStyle, x
+
+          switch (controllerNum) {
+          case 1:
+            circleFillStyle = "rgba(255, 100, 100, 1)"
+            x = CONSTANTS.DISPLAY_WIDTH_PIXELS / 4
+            break;
+          case 2:
+            circleFillStyle = "rgba(100, 100, 255, 1)"
+            x = CONSTANTS.DISPLAY_WIDTH_PIXELS / 4 * 3
+          }
+
+          const y = CONSTANTS.DISPLAY_HEIGHT_PIXELS / 2
+          const circleWidthPixels = CONSTANTS.DISPLAY_WIDTH_PIXELS / 4
+
+          ctx.beginPath()
+          ctx.arc(
+            x,
+            y,
+            circleWidthPixels,
+            0,
+            knobValue * 2 * Math.PI,
+            false
+          )
+
+          x -= fontSizePixels * 7
+          ctx.fillStyle = circleFillStyle
+          ctx.fill()
+          // Label
+          ctx.font = `${fontSizePixels}px Monospace`
+          ctx.fillStyle = "rgb(0, 0, 0)"
+          ctx.fillText(
+            `         Knob: ${knobValue.toFixed(2)}`,
+            x,
+            y
+          )
+          ctx.fillText(
+            `System Button: ${systemButtonValue}`,
+            x,
+            y + fontSizePixels
+          )
+          ctx.fillText(
+            `  Knob Button: ${knobButtonValue}`,
+            x,
+            y + fontSizePixels * 2
+          )
+        }
+
+        drawControllerCircle(
+          1,
+          controller1KnobValue,
+          controller1ButtonValue & 1,
+          (controller1ButtonValue >> 1) & 1
+        )
+
+        drawControllerCircle(
+          2,
+          controller2KnobValue,
+          controller2ButtonValue & 1,
+          (controller2ButtonValue >> 1) & 1
+        )
+
+      }
+
+      function registerReloadOnTapHandler () {
+        document.getElementById('canvas').addEventListener('click', () => {
+          window.location.reload(true)
+        })
+      }
+
+
+      const inputWatchdog = InputWatchdog({timeoutPeriodMs: 100})
+      inputWatchdog.on('problem', () => console.log('controller problem'))
+      inputWatchdog.on('ok', numMissed =>
+        console.log(`controller ok. missed: ${numMissed}`))
+
+      function registerControllerInputHandler () {
+        const ws = new WebSocket(`ws://${window.location.host}/input`)
+        ws.onmessage = e => {
+          inputWatchdog.reset()
+          const data = JSON.parse(e.data)
+          // If either system button is pressed, redirect to menu.
+          if (data[1] & 1 || data[3] & 1)
+            window.location = '/'
+          else
+            redraw(data)
+        }
+      }
+
+      function makeFullScreen () {
+        document.getElementById('canvas').requestFullscreen()
+        document.getElementById('fullscreen').remove()
+      }
+
+      function addFullScreenButton () {
+        const button = document.createElement('button')
+        button.innerText = 'Full Screen'
+        button.addEventListener('click', () => makeFullScreen)
+        document.body.append(button)
+      }
+
+      function resize() {
+        // Set the display width and height to actual
+        const rootNode = document.body.parentNode
+        const width = rootNode.clientWidth
+        const height = rootNode.clientHeight
+        CONSTANTS.DISPLAY_WIDTH_PIXELS = width
+        CONSTANTS.DISPLAY_HEIGHT_PIXELS = height
+
+        const canvas = document.getElementById('canvas')
+        canvas.width = width
+        canvas.height = CONSTANTS.DISPLAY_HEIGHT_PIXELS
+      }
+
+      function registerResizeHandler () {
+        window.addEventListener('resize', resize)
+      }
+
+      function previewMode () {
+        const INC = 1
+        const DEC = 0
+        let states = [
+          { value: 100,
+            direction: INC
+          },
+
+          { value: 400,
+            direction: INC
+          },
+        ]
+
+        const updateStates = () => {
+          for (const state of states) {
+
+            const n = Math.ceil(Math.random() * 100)
+
+            if (state.direction === INC) {
+              // Handle increment.
+              state.value += n
+              if (state.value > 511) {
+                state.value = 511
+                state.direction = DEC
+              }
+            } else {
+              // Handle deincrement.
+              state.value -= n
+              if (state.value < 0) {
+                state.value = 0
+                state.direction = INC
+              }
+            }
+          }
+        }
+
+        const update = () => {
+          updateStates()
+          redraw([
+            states[0].value,
+            states[0].value & 3,
+            states[1].value,
+            states[1].value & 3,
+          ])
+        }
+        window.setInterval(update, 250)
+      }
+
+      function init () {
+        resize()
+        redraw([511, 0b11, 511, 0b11])
+
+        // Only register handlers if not in preview mode.
+        let params = new URLSearchParams(window.location.search)
+        const preview = params.get('preview') === '1'
+        if (preview) {
+          previewMode()
+        } else {
+          registerReloadOnTapHandler()
+          registerControllerInputHandler()
+          registerResizeHandler()
+          addFullScreenButton()
+        }
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        init()
+      })
+
+    </script>
+
+  </head>
+
+  <body>
+    <canvas id="canvas" width="0" height="0">
+    </canvas>
+  </body>
+
+</html>
